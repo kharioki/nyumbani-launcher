@@ -167,6 +167,7 @@ private fun SectionItem(title: String, selected: Boolean, onFocused: () -> Unit,
     ) { focused ->
         Row(
             Modifier
+                .fillMaxWidth()
                 .heightIn(min = 40.dp)
                 .background(if (selected && !focused) Color.White.copy(alpha = 0.08f) else Color.Transparent)
                 .padding(horizontal = 14.dp, vertical = 9.dp),
@@ -223,7 +224,15 @@ private fun GreetingPane(settings: LauncherSettings, save: (suspend SettingsRepo
 
 @Composable
 private fun WallpaperPane(settings: LauncherSettings, onOpenWallpaper: () -> Unit) {
-    PaneHeader("Wallpaper", "To use your own image, push it from a computer and press Home:")
+    val current = Wallpaper.BUNDLED.firstOrNull { it.id == settings.wallpaperId }?.name
+        ?: if (Wallpaper.isImported(settings.wallpaperId)) "Your own image" else Wallpaper.BUNDLED.first().name
+    PaneHeader("Wallpaper", "Pick a bundled wallpaper, send a photo from your phone, or copy one from a USB drive.")
+    Text("In use: $current", style = style(14, FontWeight.Normal, alpha = 0.85f))
+    Spacer(Modifier.height(14.dp))
+    PillButton("Choose wallpaper", onClick = onOpenWallpaper)
+    Spacer(Modifier.height(20.dp))
+    Text("Advanced: an image pushed over ADB overrides this choice.", style = style(12, FontWeight.Normal, alpha = 0.6f))
+    Spacer(Modifier.height(6.dp))
     Command("adb push my-wallpaper.jpg /sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/wallpaper.jpg")
 }
 

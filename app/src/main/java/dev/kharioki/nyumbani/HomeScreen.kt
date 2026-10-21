@@ -3,6 +3,7 @@ package dev.kharioki.nyumbani
 import android.text.format.DateFormat
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -84,6 +85,7 @@ private sealed interface Overlay {
     data object None : Overlay
     data object AllApps : Overlay
     data class Settings(val section: SettingsSection) : Overlay
+    data object Wallpaper : Overlay
     data class DockMenu(val packageName: String) : Overlay
 }
 
@@ -123,18 +125,24 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
         scope.launch { settingsRepo.setDock(packages) }
     }
 
-    // Refresh on every resume: wallpaper (only if it changed), installed apps, Continue watching.
-    LaunchedEffect(resumeTick) {
+    // Wallpaper: on every resume (the ADB file may have changed) and whenever another one is picked.
+    // Only decoded again if what's on screen would actually change.
+    val wallpaperId = settings?.wallpaperId
+    LaunchedEffect(resumeTick, wallpaperId) {
+        if (wallpaperId == null) return@LaunchedEffect
         val metrics = context.resources.displayMetrics
         val w = maxOf(metrics.widthPixels, metrics.heightPixels)
         val h = minOf(metrics.widthPixels, metrics.heightPixels)
 
-        val signature = withContext(Dispatchers.IO) { Wallpaper.signature(context) }
+        val signature = withContext(Dispatchers.IO) { Wallpaper.signature(context, wallpaperId) }
         if (signature != wallpaperSignature) {
-            wallpaper = withContext(Dispatchers.IO) { Wallpaper.load(context, w, h) }
+            wallpaper = withContext(Dispatchers.IO) { Wallpaper.load(context, wallpaperId, w, h) }
             wallpaperSignature = signature
         }
+    }
 
+    // Refresh installed apps on every resume.
+    LaunchedEffect(resumeTick) {
         val apps = withContext(Dispatchers.IO) { repo.loadAllApps() }
         allApps = apps
         settingsRepo.seedDockIfNeeded(apps)
@@ -178,8 +186,10 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                     .background(Night)
                     .onSizeChanged { screen = it }
             ) {
-                wallpaper?.let {
-                    Image(bitmap = it.sharp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                Crossfade(targetState = wallpaper, animationSpec = tween(600), label = "wallpaper") { images ->
+                    images?.let {
+                        Image(bitmap = it.sharp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    }
                 }
 
                 // Gentle shading behind the greeting and the dock so text stays readable on any wallpaper.
@@ -288,9 +298,16 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                             allApps = allApps,
                             repo = settingsRepo,
                             initialSection = o.section,
-                            onOpenWallpaper = {},
+                            onOpenWallpaper = { overlay = Overlay.Wallpaper },
                             onOpenSystemSettings = { repo.openSettings() },
                             onClose = { overlay = Overlay.None },
+                        )
+                    }
+                    Overlay.Wallpaper -> settings?.let { s ->
+                        WallpaperPicker(
+                            settings = s,
+                            repo = settingsRepo,
+                            onClose = { overlay = Overlay.Settings(SettingsSection.WALLPAPER) },
                         )
                     }
                     is Overlay.DockMenu -> {
