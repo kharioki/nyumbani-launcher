@@ -18,9 +18,6 @@ data class AppEntry(
     val icon: ImageBitmap?,
 )
 
-/** A dock slot: the configured favourite plus the installed app it resolved to (null = not installed). */
-data class DockSlot(val favorite: Favorite, val app: AppEntry?)
-
 class AppRepository(private val context: Context) {
     private val pm: PackageManager = context.packageManager
 
@@ -52,12 +49,11 @@ class AppRepository(private val context: Context) {
         return result.sortedBy { it.label.lowercase() }
     }
 
-    fun resolveDock(allApps: List<AppEntry>): List<DockSlot> =
-        LauncherConfig.FAVORITES.map { fav ->
-            val byPackage = fav.packages.firstNotNullOfOrNull { pkg -> allApps.firstOrNull { it.packageName == pkg } }
-            val byLabel = allApps.firstOrNull { it.label.equals(fav.label, ignoreCase = true) }
-            DockSlot(fav, byPackage ?: byLabel)
-        }
+    /** The saved dock packages that are still installed, in dock order. */
+    fun resolveDock(packages: List<String>, allApps: List<AppEntry>): List<AppEntry> {
+        val byPackage = allApps.associateBy { it.packageName }
+        return packages.mapNotNull { byPackage[it] }
+    }
 
     fun launch(packageName: String) {
         val intent = pm.getLeanbackLaunchIntentForPackage(packageName)

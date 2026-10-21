@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -109,17 +110,23 @@ private val SafeV = 32.dp
 fun HomeScreen(resumeTick: Int, homeTick: Int) {
     val context = LocalContext.current
     val repo = remember { AppRepository(context) }
+    val settingsRepo = remember { SettingsRepository(context) }
+    // Null until DataStore has been read once.
+    val settings by settingsRepo.settings.collectAsState(initial = null)
 
     var wallpaper by remember { mutableStateOf<Wallpaper.Images?>(null) }
     var screen by remember { mutableStateOf(IntSize.Zero) }
     var wallpaperSignature by remember { mutableStateOf<String?>(null) }
     var allApps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
-    var dock by remember { mutableStateOf<List<DockSlot>>(emptyList()) }
     var watchNext by remember { mutableStateOf<Map<String, WatchNextState>>(emptyMap()) }
     var activePackage by remember { mutableStateOf<String?>(null) }
     var showAllApps by remember { mutableStateOf(false) }
 
     val firstTile = remember { FocusRequester() }
+    val dockPackages = settings?.dockPackages.orEmpty()
+    val dock = remember(dockPackages, allApps) { repo.resolveDock(dockPackages, allApps) }
+
+    LaunchedEffect(Unit) { settingsRepo.seedOwnerIfNeeded() }
 
     // Refresh on every resume: wallpaper (only if it changed), installed apps, Continue watching.
     LaunchedEffect(resumeTick) {
@@ -134,12 +141,14 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
         }
 
         val apps = withContext(Dispatchers.IO) { repo.loadAllApps() }
-        val slots = repo.resolveDock(apps)
         allApps = apps
-        dock = slots
+        settingsRepo.seedDockIfNeeded(apps)
+    }
 
+    // Continue watching for the dock apps: on every resume, and whenever the dock changes.
+    LaunchedEffect(resumeTick, dock) {
         watchNext = withContext(Dispatchers.IO) {
-            slots.mapNotNull { it.app }.associate { app ->
+            dock.associate { app ->
                 app.packageName to WatchNextRepository.load(context, app.packageName, LauncherConfig.WATCH_NEXT_LIMIT)
             }
         }
@@ -165,7 +174,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                 .onSizeChanged { screen = it }
         ) {
             wallpaper?.let {
-                Image(bitmap = it.sharp,contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                Image(bitmap = it.sharp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
 
             // Gentle shading behind the greeting and the dock so text stays readable on any wallpaper.
@@ -195,7 +204,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                 screen = screen,
                 modifier = Modifier.align(Alignment.TopStart).padding(start = SafeH, top = SafeV),
                 contentPadding = PaddingValues(start = 26.dp, end = 34.dp, top = 18.dp, bottom = 20.dp),
-            ) { Greeting() }
+            ) { settings?.let { Greeting(it) } }
 
             if (showAllApps) {
                 AllAppsOverlay(
@@ -214,7 +223,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                 ) {
                     ContinueWatching(
                         packageName = activePackage,
-                        appLabel = dock.firstOrNull { it.app?.packageName == activePackage }?.favorite?.label,
+                        appLabel = dock.firstOrNull { it.packageName == activePackage }?.label,
                         state = activePackage?.let { watchNext[it] },
                         onOpen = { item ->
                             val deepLink = WatchNextRepository.intentFor(item)
@@ -232,12 +241,12 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                             horizontalArrangement = Arrangement.spacedBy(18.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            dock.forEachIndexed { index, slot ->
+                            dock.forEachIndexed { index, app ->
                                 DockTile(
-                                    slot = slot,
+                                    app = app,
                                     modifier = if (index == 0) Modifier.focusRequester(firstTile) else Modifier,
-                                    onFocused = { activePackage = slot.app?.packageName },
-                                    onClick = { slot.app?.let { repo.launch(it.packageName) } },
+                                    onFocused = { activePackage = app.packageName },
+                                    onClick = { repo.launch(app.packageName) },
                                 )
                             }
                             Spacer(Modifier.width(2.dp))
@@ -262,7 +271,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
 // ---------------------------------------------------------------- Greeting + clock
 
 @Composable
-private fun Greeting(modifier: Modifier = Modifier) {
+private fun Greeting(settings: LauncherSettings, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     // Ticks on the minute, so the clock is never stale and we don't recompose every second.
     val now by produceState(initialValue = ZonedDateTime.now()) {
@@ -271,23 +280,29 @@ private fun Greeting(modifier: Modifier = Modifier) {
             delay(60_000L - System.currentTimeMillis() % 60_000L + 50L)
         }
     }
-    val is24h = DateFormat.is24HourFormat(context)
+    val is24h = when (settings.use24Hour) {
+        ClockMode.FOLLOW_SYSTEM -> DateFormat.is24HourFormat(context)
+        ClockMode.ON -> true
+        ClockMode.OFF -> false
+    }
     val timeFormat = remember(is24h) { DateTimeFormatter.ofPattern(if (is24h) "HH:mm" else "h:mm") }
     val amPmFormat = remember { DateTimeFormatter.ofPattern("a", Locale.getDefault()) }
     val dateFormat = remember { DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()) }
 
     Column(modifier) {
-        Text("${LauncherConfig.GREETING} ${LauncherConfig.NAME}", style = style(26, FontWeight.Light))
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Filled.LocationOn,
-                contentDescription = null,
-                tint = Accent,
-                modifier = Modifier.size(14.dp),
-            )
-            Spacer(Modifier.width(5.dp))
-            Text(LauncherConfig.LOCATION.uppercase(), style = style(12, FontWeight.Medium, alpha = 0.8f, tracking = 2.4f))
+        Text(greetingText(settings, now.hour), style = style(26, FontWeight.Light))
+        if (settings.location.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.LocationOn,
+                    contentDescription = null,
+                    tint = Accent,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(settings.location.uppercase(), style = style(12, FontWeight.Medium, alpha = 0.8f, tracking = 2.4f))
+            }
         }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.Bottom) {
@@ -302,6 +317,22 @@ private fun Greeting(modifier: Modifier = Modifier) {
             }
         }
         Text(now.format(dateFormat), style = style(17, FontWeight.Normal, alpha = 0.85f))
+    }
+}
+
+/** "Good evening, Tony", "Hey Tony", or just the greeting when no name is set. */
+fun greetingText(settings: LauncherSettings, hour: Int): String {
+    val name = settings.name.trim()
+    val timeOfDay = when (hour) {
+        in 5..11 -> "Good morning"
+        in 12..16 -> "Good afternoon"
+        else -> "Good evening"
+    }
+    val custom = settings.customGreeting.trim()
+    return when {
+        settings.greetingStyle == GreetingStyle.CUSTOM && custom.isNotEmpty() -> if (name.isEmpty()) custom else "$custom $name"
+        name.isEmpty() -> timeOfDay
+        else -> "$timeOfDay, $name"
     }
 }
 
@@ -421,7 +452,7 @@ private fun WatchNextCard(item: WatchNextItem, onClick: () -> Unit) {
 
 @Composable
 private fun DockTile(
-    slot: DockSlot,
+    app: AppEntry,
     modifier: Modifier = Modifier,
     onFocused: () -> Unit,
     onClick: () -> Unit,
@@ -443,7 +474,7 @@ private fun DockTile(
             focusedContainerColor = Color.White.copy(alpha = 0.16f),
         ),
     ) {
-        AppArt(app = slot.app, fallbackLabel = slot.favorite.label)
+        AppArt(app = app, fallbackLabel = app.label)
     }
 }
 
