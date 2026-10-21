@@ -34,35 +34,34 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Icon
@@ -74,45 +73,34 @@ import androidx.tv.material3.darkColorScheme
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private val Accent = Color(0xFFF2A866)
-private val Night = Color(0xFF0E0F1F)
+/** What's showing on top of the home screen. */
+private sealed interface Overlay {
+    data object None : Overlay
+    data object AllApps : Overlay
+    data class Settings(val section: SettingsSection) : Overlay
+    data class DockMenu(val packageName: String) : Overlay
+}
 
-private val Inter = FontFamily(
-    Font(R.font.inter_thin, FontWeight.Thin),
-    Font(R.font.inter_extralight, FontWeight.ExtraLight),
-    Font(R.font.inter_light, FontWeight.Light),
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-)
-
-private val SoftShadow = Shadow(color = Color.Black.copy(alpha = 0.30f), offset = Offset(0f, 1f), blurRadius = 8f)
-
-private fun style(size: Int, weight: FontWeight, alpha: Float = 1f, tracking: Float = 0f) = TextStyle(
-    fontFamily = Inter,
-    fontSize = size.sp,
-    fontWeight = weight,
-    color = Color.White.copy(alpha = alpha),
-    letterSpacing = tracking.sp,
-    shadow = SoftShadow,
-)
-
-// TV-safe margins: keeps everything clear of overscan on older panels.
-private val SafeH = 56.dp
-private val SafeV = 32.dp
+/** Focus target meaning "the gear button" rather than a dock app. */
+private const val FOCUS_GEAR = "#gear"
 
 @Composable
 fun HomeScreen(resumeTick: Int, homeTick: Int) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val repo = remember { AppRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
-    // Null until DataStore has been read once.
-    val settings by settingsRepo.settings.collectAsState(initial = null)
+    // Null until DataStore has been read once. Owner seeding runs first, so setup doesn't flash.
+    val settings by produceState<LauncherSettings?>(initialValue = null) {
+        settingsRepo.seedOwnerIfNeeded()
+        settingsRepo.settings.collect { value = it }
+    }
 
     var wallpaper by remember { mutableStateOf<Wallpaper.Images?>(null) }
     var screen by remember { mutableStateOf(IntSize.Zero) }
@@ -120,13 +108,20 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
     var allApps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var watchNext by remember { mutableStateOf<Map<String, WatchNextState>>(emptyMap()) }
     var activePackage by remember { mutableStateOf<String?>(null) }
-    var showAllApps by remember { mutableStateOf(false) }
+    var overlay by remember { mutableStateOf<Overlay>(Overlay.None) }
+    // Where focus goes when the home screen is back in front: a dock package, FOCUS_GEAR, or null for the first app.
+    var focusTarget by remember { mutableStateOf<String?>(null) }
 
-    val firstTile = remember { FocusRequester() }
+    val gearFocus = remember { FocusRequester() }
+    val tileFocus = remember { HashMap<String, FocusRequester>() }
     val dockPackages = settings?.dockPackages.orEmpty()
     val dock = remember(dockPackages, allApps) { repo.resolveDock(dockPackages, allApps) }
+    val dockIds = dock.map { it.packageName }
+    val showSetup = settings?.setupDone == false
 
-    LaunchedEffect(Unit) { settingsRepo.seedOwnerIfNeeded() }
+    fun saveDock(packages: List<String>) {
+        scope.launch { settingsRepo.setDock(packages) }
+    }
 
     // Refresh on every resume: wallpaper (only if it changed), installed apps, Continue watching.
     LaunchedEffect(resumeTick) {
@@ -146,7 +141,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
     }
 
     // Continue watching for the dock apps: on every resume, and whenever the dock changes.
-    LaunchedEffect(resumeTick, dock) {
+    LaunchedEffect(resumeTick, dockIds) {
         watchNext = withContext(Dispatchers.IO) {
             dock.associate { app ->
                 app.packageName to WatchNextRepository.load(context, app.packageName, LauncherConfig.WATCH_NEXT_LIMIT)
@@ -154,12 +149,21 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
         }
     }
 
-    // First launch, Home pressed, or All apps closed: put focus back on the first app.
-    LaunchedEffect(homeTick) { showAllApps = false }
-    LaunchedEffect(homeTick, showAllApps, dock.isNotEmpty()) {
-        if (!showAllApps && dock.isNotEmpty()) {
+    // Home pressed: close whatever is open and go back to the first app.
+    LaunchedEffect(homeTick) {
+        overlay = Overlay.None
+        focusTarget = null
+    }
+    // First launch, Home pressed, or an overlay closed: put focus back in the dock.
+    LaunchedEffect(homeTick, overlay, showSetup, dockIds) {
+        if (overlay == Overlay.None && !showSetup && dock.isNotEmpty()) {
             delay(60)
-            runCatching { firstTile.requestFocus() }
+            val target = when (val t = focusTarget) {
+                FOCUS_GEAR -> gearFocus
+                null -> null
+                else -> tileFocus[t]
+            } ?: tileFocus[dockIds.first()]
+            runCatching { target?.requestFocus() }
         }
     }
 
@@ -167,105 +171,171 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
     BackHandler(enabled = true) {}
 
     MaterialTheme(colorScheme = darkColorScheme()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Night)
-                .onSizeChanged { screen = it }
-        ) {
-            wallpaper?.let {
-                Image(bitmap = it.sharp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            }
-
-            // Gentle shading behind the greeting and the dock so text stays readable on any wallpaper.
+        CompositionLocalProvider(LocalBackdrop provides Backdrop(wallpaper?.frosted, screen)) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .drawBehind {
-                        drawRect(
-                            Brush.radialGradient(
-                                listOf(Color.Black.copy(alpha = 0.25f), Color.Transparent),
-                                center = Offset.Zero,
-                                radius = size.width * 0.55f,
+                    .background(Night)
+                    .onSizeChanged { screen = it }
+            ) {
+                wallpaper?.let {
+                    Image(bitmap = it.sharp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+
+                // Gentle shading behind the greeting and the dock so text stays readable on any wallpaper.
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .drawBehind {
+                            drawRect(
+                                Brush.radialGradient(
+                                    listOf(Color.Black.copy(alpha = 0.25f), Color.Transparent),
+                                    center = Offset.Zero,
+                                    radius = size.width * 0.55f,
+                                )
                             )
+                            drawRect(
+                                Brush.verticalGradient(
+                                    0f to Color.Transparent,
+                                    0.5f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.35f),
+                                )
+                            )
+                        }
+                )
+
+                // Settings has its own title in that corner.
+                if (overlay !is Overlay.Settings) {
+                    GlassPanel(
+                        modifier = Modifier.align(Alignment.TopStart).padding(start = SafeH, top = SafeV),
+                        contentPadding = PaddingValues(start = 26.dp, end = 34.dp, top = 18.dp, bottom = 20.dp),
+                    ) { settings?.let { Greeting(it) } }
+                }
+
+                if (overlay == Overlay.None || overlay is Overlay.DockMenu) {
+                    // Only reachable with the D-pad when nothing is on top of it.
+                    val dockFocusable = overlay == Overlay.None && !showSetup
+                    val tileWidth = dockTileWidth(LocalConfiguration.current.screenWidthDp.dp, dock.size)
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(start = SafeH, end = SafeH, bottom = SafeV)
+                    ) {
+                        ContinueWatching(
+                            packageName = activePackage.takeIf { dockFocusable },
+                            appLabel = dock.firstOrNull { it.packageName == activePackage }?.label,
+                            state = activePackage?.let { watchNext[it] },
+                            onOpen = { item ->
+                                val deepLink = WatchNextRepository.intentFor(item)
+                                if (deepLink != null) repo.start(deepLink) else repo.launch(item.packageName)
+                            },
                         )
-                        drawRect(
-                            Brush.verticalGradient(
-                                0f to Color.Transparent,
-                                0.5f to Color.Transparent,
-                                1f to Color.Black.copy(alpha = 0.35f),
-                            )
+                        Spacer(Modifier.height(14.dp))
+                        GlassPanel(
+                            shape = RoundedCornerShape(30.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(DockGap),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                dock.forEach { app ->
+                                    DockTile(
+                                        app = app,
+                                        width = tileWidth,
+                                        focusable = dockFocusable,
+                                        modifier = Modifier.focusRequester(tileFocus.getOrPut(app.packageName) { FocusRequester() }),
+                                        onFocused = { activePackage = app.packageName },
+                                        onClick = { repo.launch(app.packageName) },
+                                        onLongClick = { overlay = Overlay.DockMenu(app.packageName) },
+                                    )
+                                }
+                                Spacer(Modifier.width(2.dp))
+                                RoundButton(
+                                    label = "All apps",
+                                    focusable = dockFocusable,
+                                    onFocused = { activePackage = null },
+                                    onClick = { overlay = Overlay.AllApps },
+                                ) { DotsGrid() }
+                                RoundButton(
+                                    label = "Settings",
+                                    focusable = dockFocusable,
+                                    modifier = Modifier.focusRequester(gearFocus),
+                                    onFocused = { activePackage = null },
+                                    onClick = {
+                                        focusTarget = FOCUS_GEAR
+                                        overlay = Overlay.Settings(SettingsSection.NAME)
+                                    },
+                                ) { Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(22.dp)) }
+                            }
+                        }
+                    }
+                }
+
+                when (val o = overlay) {
+                    Overlay.None -> Unit
+                    Overlay.AllApps -> AllAppsOverlay(
+                        apps = allApps,
+                        onLaunch = { app ->
+                            overlay = Overlay.None
+                            repo.launch(app.packageName)
+                        },
+                        onClose = { overlay = Overlay.None },
+                    )
+                    is Overlay.Settings -> settings?.let { s ->
+                        SettingsScreen(
+                            settings = s,
+                            allApps = allApps,
+                            repo = settingsRepo,
+                            initialSection = o.section,
+                            onOpenWallpaper = {},
+                            onOpenSystemSettings = { repo.openSettings() },
+                            onClose = { overlay = Overlay.None },
                         )
                     }
-            )
+                    is Overlay.DockMenu -> {
+                        val index = dockIds.indexOf(o.packageName)
+                        fun moveBy(by: Int) = saveDock(dockIds.toMutableList().apply { add(index + by, removeAt(index)) })
+                        MenuOverlay(
+                            title = dock.getOrNull(index)?.label ?: "Dock app",
+                            items = listOf(
+                                MenuItem("Move left", enabled = index > 0) { moveBy(-1) },
+                                MenuItem("Move right", enabled = index in 0 until dockIds.size - 1) { moveBy(+1) },
+                                MenuItem("Remove from dock", enabled = index >= 0 && dockIds.size > 1) {
+                                    focusTarget = dockIds.getOrNull(index + 1) ?: dockIds.getOrNull(index - 1)
+                                    saveDock(dockIds - o.packageName)
+                                },
+                            ),
+                            onDismiss = {
+                                focusTarget = o.packageName
+                                overlay = Overlay.None
+                            },
+                        )
+                    }
+                }
 
-            GlassPanel(
-                frosted = wallpaper?.frosted,
-                screen = screen,
-                modifier = Modifier.align(Alignment.TopStart).padding(start = SafeH, top = SafeV),
-                contentPadding = PaddingValues(start = 26.dp, end = 34.dp, top = 18.dp, bottom = 20.dp),
-            ) { settings?.let { Greeting(it) } }
-
-            if (showAllApps) {
-                AllAppsOverlay(
-                    apps = allApps,
-                    onLaunch = { app ->
-                        showAllApps = false
-                        repo.launch(app.packageName)
-                    },
-                    onClose = { showAllApps = false },
-                )
-            } else {
-                Column(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = SafeH, end = SafeH, bottom = SafeV)
-                ) {
-                    ContinueWatching(
-                        packageName = activePackage,
-                        appLabel = dock.firstOrNull { it.packageName == activePackage }?.label,
-                        state = activePackage?.let { watchNext[it] },
-                        onOpen = { item ->
-                            val deepLink = WatchNextRepository.intentFor(item)
-                            if (deepLink != null) repo.start(deepLink) else repo.launch(item.packageName)
-                        },
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    GlassPanel(
-                        frosted = wallpaper?.frosted,
-                        screen = screen,
-                        shape = RoundedCornerShape(30.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(18.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            dock.forEachIndexed { index, app ->
-                                DockTile(
-                                    app = app,
-                                    modifier = if (index == 0) Modifier.focusRequester(firstTile) else Modifier,
-                                    onFocused = { activePackage = app.packageName },
-                                    onClick = { repo.launch(app.packageName) },
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-                            RoundButton(
-                                label = "All apps",
-                                onFocused = { activePackage = null },
-                                onClick = { showAllApps = true },
-                            ) { DotsGrid() }
-                            RoundButton(
-                                label = "Settings",
-                                onFocused = { activePackage = null },
-                                onClick = { repo.openSettings() },
-                            ) { Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(22.dp)) }
-                        }
+                if (showSetup) {
+                    settings?.let { s ->
+                        SetupFlow(settings = s, allApps = allApps, repo = settingsRepo, onDone = { focusTarget = null })
                     }
                 }
             }
         }
     }
+}
+
+private val DockGap = 18.dp
+
+/**
+ * Dock tiles shrink when there are more apps, so the dock plus the two round buttons always fit
+ * between the TV-safe margins (5 apps on a 960dp-wide screen come out at about 118dp).
+ */
+private fun dockTileWidth(screenWidth: Dp, count: Int): Dp {
+    if (count <= 0) return 164.dp
+    // Panel padding (32), spacer + two round buttons (2 + 48 + 48) and their gaps (3 x 18).
+    val fixed = 32.dp + 98.dp + DockGap * 3
+    val available = screenWidth - SafeH * 2 - fixed - DockGap * (count - 1)
+    return (available / count).coerceIn(96.dp, 164.dp)
 }
 
 // ---------------------------------------------------------------- Greeting + clock
@@ -453,17 +523,22 @@ private fun WatchNextCard(item: WatchNextItem, onClick: () -> Unit) {
 @Composable
 private fun DockTile(
     app: AppEntry,
+    width: Dp,
+    focusable: Boolean,
     modifier: Modifier = Modifier,
     onFocused: () -> Unit,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(18.dp)
     Surface(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier
-            .width(164.dp)
-            .height(92.dp)
-            .onFocusChanged { if (it.isFocused) onFocused() },
+            .width(width)
+            .height(width * (92f / 164f))
+            .onFocusChanged { if (it.isFocused) onFocused() }
+            .focusProperties { canFocus = focusable },
         shape = ClickableSurfaceDefaults.shape(shape = shape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
         border = ClickableSurfaceDefaults.border(
@@ -510,8 +585,10 @@ private fun AppArt(app: AppEntry?, fallbackLabel: String) {
 @Composable
 private fun RoundButton(
     label: String,
+    focusable: Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -520,12 +597,13 @@ private fun RoundButton(
         Spacer(Modifier.height(LabelSlot))
         Surface(
             onClick = onClick,
-            modifier = Modifier
+            modifier = modifier
                 .size(48.dp)
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) onFocused()
-                },
+                }
+                .focusProperties { canFocus = focusable },
             shape = ClickableSurfaceDefaults.shape(shape = CircleShape),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1.12f),
             colors = ClickableSurfaceDefaults.colors(

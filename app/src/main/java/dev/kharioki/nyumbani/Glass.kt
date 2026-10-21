@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,11 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/** What a glass panel needs to look through: the frosted wallpaper and the screen size it covers. */
+class Backdrop(val frosted: ImageBitmap?, val screen: IntSize)
+
+val LocalBackdrop = compositionLocalOf { Backdrop(null, IntSize.Zero) }
+
 /**
  * A frosted "liquid glass" panel.
  *
@@ -42,8 +48,8 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun GlassPanel(
-    frosted: ImageBitmap?,
-    screen: IntSize,
+    frosted: ImageBitmap? = LocalBackdrop.current.frosted,
+    screen: IntSize = LocalBackdrop.current.screen,
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(28.dp),
     contentPadding: PaddingValues = PaddingValues(horizontal = 26.dp, vertical = 20.dp),
