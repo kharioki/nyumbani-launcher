@@ -3,8 +3,8 @@
 A one-screen home for an Android TV (built for a TCL Smart TV Pro on Android TV 11). `preview.png` shows the layout.
 
 - full-screen 4K wallpaper (a savanna dusk is bundled; swap in your own any time)
-- top left: **Hey Tony**, **Nairobi**, the time and the date
-- bottom: **Apple TV, Netflix, YouTube**
+- top left: a frosted-glass widget with **Hey Tony**, **Nairobi**, the time and the date
+- bottom: **Apple TV, Netflix, YouTube** in one glass dock (the glass takes its colours from whatever wallpaper is set)
 - focus an app → its top 3 **Continue watching** items appear above the dock; select one to resume
 - two small buttons at the end of the dock: **All apps** and **Settings**, so nothing is out of reach
 
@@ -35,15 +35,24 @@ adb connect 192.168.100.9:5555
 adb install -r app-release.apk
 ```
 
-## 3. Allow "Continue watching"
+## 3. Check "Continue watching"
 
-The launcher reads the shared Watch Next list that Netflix, YouTube and other apps publish. The first time it opens it asks for permission; if no prompt appears (or you dismissed it), grant it over ADB:
+The launcher reads the shared Watch Next list that Netflix, YouTube and other apps publish. Whether it can do that depends on how your TV defines the permission. Check whether the launcher has it:
 
 ```bash
-adb shell pm grant dev.kharioki.nyumbani com.android.providers.tv.permission.READ_EPG_DATA
+adb shell dumpsys package dev.kharioki.nyumbani | grep READ_EPG
 ```
 
-Then press Home. If an app still shows "Nothing to continue", that app isn't publishing Watch Next entries on your TV (or the TV restricts this list to system apps). Apple TV in particular may not publish one.
+`granted=true` means Continue watching works. If not, see how the TV protects the permission:
+
+```bash
+adb shell dumpsys package permission com.android.providers.tv.permission.READ_EPG_DATA | grep -i prot
+```
+
+- `prot=normal`: the permission is granted automatically at install, so there's nothing to do. `pm grant` isn't needed (it fails with "not a changeable permission type").
+- `prot=signature|privileged`: only system apps can read the list. The Continue watching row just stays empty and the wallpaper shows through.
+
+If an app shows "Nothing to continue" even with the permission granted, that app isn't publishing Watch Next entries on your TV. Apple TV in particular may not publish one.
 
 ## 4. Make it your Home screen
 

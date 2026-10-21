@@ -50,15 +50,16 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
@@ -89,7 +90,7 @@ private val Inter = FontFamily(
     Font(R.font.inter_semibold, FontWeight.SemiBold),
 )
 
-private val SoftShadow = Shadow(color = Color.Black.copy(alpha = 0.45f), offset = Offset(0f, 2f), blurRadius = 18f)
+private val SoftShadow = Shadow(color = Color.Black.copy(alpha = 0.30f), offset = Offset(0f, 1f), blurRadius = 8f)
 
 private fun style(size: Int, weight: FontWeight, alpha: Float = 1f, tracking: Float = 0f) = TextStyle(
     fontFamily = Inter,
@@ -102,14 +103,15 @@ private fun style(size: Int, weight: FontWeight, alpha: Float = 1f, tracking: Fl
 
 // TV-safe margins: keeps everything clear of overscan on older panels.
 private val SafeH = 56.dp
-private val SafeV = 36.dp
+private val SafeV = 32.dp
 
 @Composable
 fun HomeScreen(resumeTick: Int, homeTick: Int) {
     val context = LocalContext.current
     val repo = remember { AppRepository(context) }
 
-    var wallpaper by remember { mutableStateOf<ImageBitmap?>(null) }
+    var wallpaper by remember { mutableStateOf<Wallpaper.Images?>(null) }
+    var screen by remember { mutableStateOf(IntSize.Zero) }
     var wallpaperSignature by remember { mutableStateOf<String?>(null) }
     var allApps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var dock by remember { mutableStateOf<List<DockSlot>>(emptyList()) }
@@ -160,9 +162,10 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
             Modifier
                 .fillMaxSize()
                 .background(Night)
+                .onSizeChanged { screen = it }
         ) {
             wallpaper?.let {
-                Image(bitmap = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                Image(bitmap = it.sharp,contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
 
             // Gentle shading behind the greeting and the dock so text stays readable on any wallpaper.
@@ -172,7 +175,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                     .drawBehind {
                         drawRect(
                             Brush.radialGradient(
-                                listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent),
+                                listOf(Color.Black.copy(alpha = 0.25f), Color.Transparent),
                                 center = Offset.Zero,
                                 radius = size.width * 0.55f,
                             )
@@ -181,13 +184,18 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                             Brush.verticalGradient(
                                 0f to Color.Transparent,
                                 0.5f to Color.Transparent,
-                                1f to Color.Black.copy(alpha = 0.65f),
+                                1f to Color.Black.copy(alpha = 0.35f),
                             )
                         )
                     }
             )
 
-            Greeting(Modifier.align(Alignment.TopStart).padding(start = SafeH, top = SafeV))
+            GlassPanel(
+                frosted = wallpaper?.frosted,
+                screen = screen,
+                modifier = Modifier.align(Alignment.TopStart).padding(start = SafeH, top = SafeV),
+                contentPadding = PaddingValues(start = 26.dp, end = 34.dp, top = 18.dp, bottom = 20.dp),
+            ) { Greeting() }
 
             if (showAllApps) {
                 AllAppsOverlay(
@@ -213,30 +221,37 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                             if (deepLink != null) repo.start(deepLink) else repo.launch(item.packageName)
                         },
                     )
-                    Spacer(Modifier.height(16.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(22.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    Spacer(Modifier.height(14.dp))
+                    GlassPanel(
+                        frosted = wallpaper?.frosted,
+                        screen = screen,
+                        shape = RoundedCornerShape(30.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     ) {
-                        dock.forEachIndexed { index, slot ->
-                            DockTile(
-                                slot = slot,
-                                modifier = if (index == 0) Modifier.focusRequester(firstTile) else Modifier,
-                                onFocused = { activePackage = slot.app?.packageName },
-                                onClick = { slot.app?.let { repo.launch(it.packageName) } },
-                            )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            dock.forEachIndexed { index, slot ->
+                                DockTile(
+                                    slot = slot,
+                                    modifier = if (index == 0) Modifier.focusRequester(firstTile) else Modifier,
+                                    onFocused = { activePackage = slot.app?.packageName },
+                                    onClick = { slot.app?.let { repo.launch(it.packageName) } },
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
+                            RoundButton(
+                                label = "All apps",
+                                onFocused = { activePackage = null },
+                                onClick = { showAllApps = true },
+                            ) { DotsGrid() }
+                            RoundButton(
+                                label = "Settings",
+                                onFocused = { activePackage = null },
+                                onClick = { repo.openSettings() },
+                            ) { Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(22.dp)) }
                         }
-                        Spacer(Modifier.width(10.dp))
-                        RoundButton(
-                            label = "All apps",
-                            onFocused = { activePackage = null },
-                            onClick = { showAllApps = true },
-                        ) { DotsGrid() }
-                        RoundButton(
-                            label = "Settings",
-                            onFocused = { activePackage = null },
-                            onClick = { repo.openSettings() },
-                        ) { Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(24.dp)) }
                     }
                 }
             }
@@ -262,7 +277,7 @@ private fun Greeting(modifier: Modifier = Modifier) {
     val dateFormat = remember { DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()) }
 
     Column(modifier) {
-        Text("${LauncherConfig.GREETING} ${LauncherConfig.NAME}", style = style(30, FontWeight.Light))
+        Text("${LauncherConfig.GREETING} ${LauncherConfig.NAME}", style = style(26, FontWeight.Light))
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -276,13 +291,13 @@ private fun Greeting(modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(now.format(timeFormat), style = style(64, FontWeight.Thin))
+            Text(now.format(timeFormat), style = style(56, FontWeight.Thin))
             if (!is24h) {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     now.format(amPmFormat).uppercase(),
                     style = style(18, FontWeight.Light, alpha = 0.85f),
-                    modifier = Modifier.padding(bottom = 13.dp),
+                    modifier = Modifier.padding(bottom = 11.dp),
                 )
             }
         }
@@ -292,7 +307,7 @@ private fun Greeting(modifier: Modifier = Modifier) {
 
 // ---------------------------------------------------------------- Continue watching
 
-private val ContinueAreaHeight = 146.dp
+private val ContinueAreaHeight = 138.dp
 
 @Composable
 private fun ContinueWatching(
@@ -315,11 +330,10 @@ private fun ContinueWatching(
         ) { (pkg, label, st) ->
             val name = label ?: "this app"
             when {
-                pkg == null || st == null || st == WatchNextState.Loading -> Box(Modifier.fillMaxWidth())
-                st == WatchNextState.NoPermission -> Hint(
-                    "Continue watching needs permission. Run:  adb shell pm grant ${LocalContext.current.packageName} ${WatchNextRepository.PERMISSION}"
-                )
-                st is WatchNextState.Failed -> Hint("Continue watching isn't available on this TV.")
+                // Many TVs reserve the Watch Next list for system apps. When we can't read it,
+                // leave the space empty rather than nagging: the wallpaper just shows through.
+                pkg == null || st == null || st == WatchNextState.Loading ||
+                    st == WatchNextState.NoPermission || st is WatchNextState.Failed -> Box(Modifier.fillMaxWidth())
                 st is WatchNextState.Loaded -> {
                     if (st.items.isEmpty()) {
                         Hint("Nothing to continue on $name")
@@ -349,8 +363,8 @@ private fun WatchNextCard(item: WatchNextItem, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         modifier = Modifier
-            .width(200.dp)
-            .height(112.dp),
+            .width(184.dp)
+            .height(104.dp),
         shape = ClickableSurfaceDefaults.shape(shape = shape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
         border = ClickableSurfaceDefaults.border(
@@ -412,12 +426,12 @@ private fun DockTile(
     onFocused: () -> Unit,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(18.dp)
     Surface(
         onClick = onClick,
         modifier = modifier
-            .width(176.dp)
-            .height(99.dp)
+            .width(164.dp)
+            .height(92.dp)
             .onFocusChanged { if (it.isFocused) onFocused() },
         shape = ClickableSurfaceDefaults.shape(shape = shape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
@@ -476,7 +490,7 @@ private fun RoundButton(
         Surface(
             onClick = onClick,
             modifier = Modifier
-                .size(52.dp)
+                .size(48.dp)
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) onFocused()
