@@ -1,6 +1,8 @@
 package dev.kharioki.nyumbani
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +38,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -238,11 +241,42 @@ private fun WallpaperPane(settings: LauncherSettings, onOpenWallpaper: () -> Uni
 
 @Composable
 private fun HomeScreenPane() {
+    val context = LocalContext.current
+    var isHome by remember { mutableStateOf(HomeRole.isHeld(context)) }
+    // The ADB route: shown when the TV can't (or won't) show its own prompt.
+    var showFallback by remember { mutableStateOf(false) }
+    val askForRole = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        isHome = HomeRole.isHeld(context)
+        if (!isHome) showFallback = true
+    }
+
     PaneHeader(
         "Make Nyumbani your Home screen",
         "So the Home button on your remote opens Nyumbani instead of the TV's own launcher.",
     )
-    HomeSetupInstructions()
+    if (isHome) {
+        Text("Nyumbani is your Home screen.", style = style(15, FontWeight.Medium, color = Accent))
+        Spacer(Modifier.height(12.dp))
+        if (!showFallback) {
+            PillButton("Home still opens the old launcher?", onClick = { showFallback = true })
+        }
+    } else {
+        PillButton(
+            "Make Nyumbani the Home screen",
+            onClick = {
+                val intent = HomeRole.requestIntent(context)
+                if (intent == null || runCatching { askForRole.launch(intent) }.isFailure) showFallback = true
+            },
+        )
+    }
+    if (showFallback) {
+        Spacer(Modifier.height(14.dp))
+        if (!isHome) {
+            Text("No prompt, or it didn't stick? Set it once from a computer:", style = style(13, FontWeight.Medium))
+            Spacer(Modifier.height(8.dp))
+        }
+        HomeSetupInstructions()
+    }
 }
 
 /** The ADB fallback for TVs that don't offer a "choose Home app" prompt. */
