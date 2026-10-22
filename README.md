@@ -1,111 +1,185 @@
-# Nyumbani — a minimal Android TV launcher
+# Nyumbani: a calm home screen for Android TV
 
-A one-screen home for an Android TV (built for a TCL Smart TV Pro on Android TV 11). `preview.png` shows the layout.
+Nyumbani ("at home" in Swahili) replaces your TV's busy home screen with a quiet one: a
+full-screen wallpaper, a frosted-glass greeting and clock, and a glass dock with just the apps
+you actually use. No ads, no recommendations, no tracking.
 
-- full-screen 4K wallpaper (a savanna dusk is bundled; swap in your own any time)
-- top left: a frosted-glass widget with **Hey Tony**, **Nairobi**, the time and the date
-- bottom: **Apple TV, Netflix, YouTube** in one glass dock (the glass takes its colours from whatever wallpaper is set)
-- focus an app → its top 3 **Continue watching** items appear above the dock; select one to resume
-- two small buttons at the end of the dock: **All apps** and **Settings**, so nothing is out of reach
+<!-- Screenshot placeholder: replace preview.png with a capture of the current home screen (1920x1080). -->
+![Nyumbani on a TV](preview.png)
 
-Kotlin + Jetpack Compose for TV. No ads, no tracking; the only network use is loading artwork for the Continue watching cards.
+- **A greeting that's yours**: "Good evening, Wanjiru" (or your own words), your city, the time and the date.
+- **Up to 5 apps in the dock**, in the order you choose. Hold OK on one to move or remove it.
+- **Continue watching**: focus an app in the dock to see what you were watching and jump back in
+  (on TVs that allow it; see [below](#continue-watching)).
+- **Your wallpaper**: four built-in ones, or send a photo from your phone by scanning a QR code,
+  or load one from a USB drive. The glass picks up the wallpaper's colours.
+- **All apps** and **Settings** are one click away at the end of the dock.
+- **Updates from the TV**: Nyumbani checks for new versions once a day and installs them when you say so.
+
+Works on Android TV and Google TV 8.0 or newer. Everything is done with the remote's D-pad.
 
 ---
 
-## 1. Build the APK
+## Install
 
-**Option A: GitHub Actions (nothing to install)**
-1. Push this folder to a new GitHub repo (private is fine).
-2. Open the repo's **Actions** tab. The *Build APK* workflow runs on every push.
-3. When it finishes, download the **nyumbani-launcher** artifact and unzip it to get `app-release.apk`.
+### With the Downloader app (no computer needed)
 
-**Option B: Android Studio / command line**
-1. Open the folder in Android Studio (Ladybug or newer) and let it sync, or run:
-   ```bash
-   ./gradlew assembleRelease
+1. On the TV, install **Downloader** (by AFTVnews) from the Play Store.
+2. Allow Downloader to install apps: **Settings → Apps → Security & restrictions → Unknown sources**
+   (on some TVs: **Settings → Privacy → Security → Install unknown apps**), then turn on **Downloader**.
+3. Open Downloader and enter this address:
+
+   ```text
+   https://github.com/kharioki/nyumbani-launcher/releases/latest/download/nyumbani.apk
    ```
-2. The APK is at `app/build/outputs/apk/release/app-release.apk`.
 
-The release build is minified (smoother on TV hardware) and signed with the debug key, so it installs without any keystore setup.
+4. When it finishes downloading, choose **Install**. If Google Play Protect asks to scan the app,
+   either let it scan or choose **More details → Install without scanning**.
+5. Open **Nyumbani** from your apps.
 
-## 2. Install it
+You can delete the downloaded file afterwards; Downloader offers to.
+
+### With a computer (ADB)
+
+Download `nyumbani.apk` from the [latest release](https://github.com/kharioki/nyumbani-launcher/releases/latest),
+turn on **Network debugging** in the TV's Developer options, then:
 
 ```bash
-adb connect 192.168.100.9:5555
-adb install -r app-release.apk
+adb connect <your-tv-ip>:5555
+adb install -r nyumbani.apk
 ```
 
-## 3. Check "Continue watching"
+Each release also lists SHA-256 checksums (`SHA256SUMS.txt`) if you want to check the download.
 
-The launcher reads the shared Watch Next list that Netflix, YouTube and other apps publish. Whether it can do that depends on how your TV defines the permission. Check whether the launcher has it:
+## First run
+
+The first time Nyumbani opens, a short welcome asks for:
+
+1. **Your name**, for the greeting
+2. **Your location**, shown under the greeting
+3. **Your dock apps**, up to 5, in order
+
+Every step can be skipped, and everything can be changed later in **Nyumbani settings**:
+press the **gear** at the end of the dock.
+
+## Make it your Home screen
+
+So the remote's Home button opens Nyumbani:
+
+1. Open Nyumbani settings (the gear) → **Make Nyumbani your Home screen** → **Make Nyumbani the Home screen**.
+2. If the TV shows a "default home app" prompt, pick **Nyumbani**.
+
+Many TVs don't offer that prompt. Then it takes a computer, once:
 
 ```bash
-adb shell dumpsys package dev.kharioki.nyumbani | grep READ_EPG
-```
-
-`granted=true` means Continue watching works. If not, see how the TV protects the permission:
-
-```bash
-adb shell dumpsys package permission com.android.providers.tv.permission.READ_EPG_DATA | grep -i prot
-```
-
-- `prot=normal`: the permission is granted automatically at install, so there's nothing to do. `pm grant` isn't needed (it fails with "not a changeable permission type").
-- `prot=signature|privileged`: only system apps can read the list. The Continue watching row just stays empty and the wallpaper shows through.
-
-If an app shows "Nothing to continue" even with the permission granted, that app isn't publishing Watch Next entries on your TV. Apple TV in particular may not publish one.
-
-## 4. Make it your Home screen
-
-Turn off Projectivy's **Override current launcher** first (or uninstall Projectivy), so the two don't fight over the Home button.
-
-```bash
-# Set Nyumbani as Home
 adb shell cmd package set-home-activity dev.kharioki.nyumbani/.MainActivity
+```
 
-# Press Home on the remote. If the stock launcher still comes back, disable it:
-adb shell pm list packages | grep -i launcher
+Press Home. If the TV's own launcher still comes back, turn it off (it's not deleted; see
+[Undo](#uninstall-or-go-back-to-the-tvs-launcher)):
+
+```bash
 adb shell pm disable-user --user 0 com.google.android.tvlauncher
 ```
 
-If a "Choose Home app" prompt appears, pick **Nyumbani** → **Always**.
+If a "Choose Home app" prompt appears, pick **Nyumbani → Always**. If you use another launcher
+such as Projectivy, turn off its **Override current launcher** first, so the two don't fight
+over the Home button.
 
-Your remote's Source/Input button and the TV's quick settings menu keep working as before; the gear on the dock opens full Android Settings.
+Your remote's Input button and the TV's quick settings keep working as before. **Android TV
+settings** (in Nyumbani settings) opens the full system settings.
 
-## 5. Use your own wallpaper (optional)
+## Change the wallpaper
 
-Any JPG, PNG or WebP works; 3840×2160 or 1920×1080 is ideal.
+Nyumbani settings → **Wallpaper** → **Choose wallpaper**. Thumbnails appear along the bottom of
+the screen; whatever you pick shows straight away.
+
+- **Built-in**: Savanna dusk, Night ridge, Dawn mist and Dusk abstract.
+- **Send from phone**: choose it and a QR code appears. With your phone on the same Wi-Fi or
+  network as the TV, scan it, pick a photo, and tap **Send to TV**. The little web page only
+  works while that screen is open (and for at most 10 minutes), and only for that one code.
+- **From USB**: plug in a USB drive and choose **From USB**. Nyumbani lists the JPEG, PNG and
+  WebP images on it, and in the TV's Download and Pictures folders. The first time, allow access
+  to photos when asked.
+
+Your own images are resized to at most 4K and stored inside Nyumbani; the original stays where it
+was. To delete one, hold OK on it in the wallpaper row.
+
+**Advanced:** an image pushed over ADB overrides whatever is picked in settings:
 
 ```bash
 adb push my-wallpaper.jpg /sdcard/Android/data/dev.kharioki.nyumbani/files/wallpaper.jpg
 ```
 
-Press Home and it switches over. Delete that file to go back to the bundled one. The bundled wallpaper is in `wallpaper/`, along with the script that generated it.
+Delete that file to go back to your choice in settings.
 
-Note: most Android TVs draw the home screen at 1920×1080 even on a 4K panel (video plays at 4K on a separate layer). The launcher decodes the 4K image at exactly the size the screen uses, so it stays pixel-sharp without wasting memory.
+## Continue watching
 
-## 6. Customise
+When you focus an app in the dock, Nyumbani shows up to three things you can continue from the
+TV's shared "Watch Next" list, which Netflix, YouTube and other apps fill in.
 
-Edit `app/src/main/java/dev/kharioki/nyumbani/LauncherConfig.kt`:
+Some TVs reserve that list for their own system apps. Then the row simply stays empty. To find out
+which kind of TV you have (needs a computer with ADB):
 
-```kotlin
-const val NAME = "Tony"
-const val GREETING = "Hey"
-const val LOCATION = "Nairobi"
-const val WATCH_NEXT_LIMIT = 3
-val FAVORITES = listOf(...)   // the dock apps, in order
+```bash
+adb shell dumpsys package permission com.android.providers.tv.permission.READ_EPG_DATA | grep -i prot
 ```
 
-Rebuild and reinstall with `adb install -r app-release.apk`. Colours and sizes are at the top of `HomeScreen.kt`.
+- `prot=normal`: Nyumbani can read the list, nothing to do.
+- `prot=signature|privileged`: only system apps can read it. There's no way around this for a
+  normal app, so the Continue watching row stays empty.
 
-The clock follows the TV's time zone and its 12/24-hour setting (Settings → Device Preferences → Date & time).
+Even when it works, an app only shows up if it publishes Watch Next entries on your TV. Apple TV
+often doesn't.
 
-## Undo everything
+## Updates
+
+Nyumbani checks for a new version once a day. When there is one, a small dot appears on the gear.
+Open Nyumbani settings → **About** → **Download & install**. The first time, Android asks you to
+allow Nyumbani to install apps; then confirm the update and Nyumbani restarts on the new version.
+You can also press **Check for updates** in About at any time.
+
+## Privacy
+
+Nyumbani has no ads, analytics or accounts. It only uses the network to:
+
+- load the artwork for Continue watching cards, from the streaming apps' own servers
+- check GitHub for a new Nyumbani release (once a day, and when you ask), and download it when you say so
+
+"Send from phone" runs a small web server on the TV only while that screen is open, reachable
+only on your home network with the one-time code in the QR code.
+
+## Uninstall or go back to the TV's launcher
+
+If you turned off the TV's own launcher, turn it back on first, then remove Nyumbani:
 
 ```bash
 adb shell pm enable com.google.android.tvlauncher
 adb uninstall dev.kharioki.nyumbani
 ```
 
+Without a computer: **Settings → Apps → Nyumbani → Uninstall**. The TV goes back to its own home
+screen (if you disabled it with ADB, re-enable it with the first command).
+
+## Not included (yet)
+
+Some TVs ignore the Home app setting entirely. An accessibility service could catch the Home
+button on those, but it needs broad permissions, so Nyumbani doesn't use one. It may come later
+as an opt-in.
+
+## Building from source
+
+```bash
+./gradlew assembleRelease   # app/build/outputs/apk/release/app-release.apk
+```
+
+Local builds are signed with the debug key, so they can't update a version installed from GitHub
+Releases (uninstall first). Built-in defaults (the first-run dock, bundled wallpapers) are in
+`app/src/main/java/dev/kharioki/nyumbani/LauncherConfig.kt` and `Wallpaper.kt`; the bundled
+wallpapers are generated by the scripts in `wallpaper/`. Publishing releases is described in
+[RELEASING.md](RELEASING.md); changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
 ## Credits
 
 Inter typeface © The Inter Project Authors, SIL Open Font License 1.1 (see `FONT-LICENSE-Inter.txt`).
+All bundled wallpapers are generated procedurally by the scripts in `wallpaper/`.
