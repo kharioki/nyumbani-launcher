@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,8 +46,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalTime
 
 enum class SettingsSection(val title: String) {
@@ -145,7 +148,7 @@ fun SettingsScreen(
                             PaneHeader("Android TV settings", "Network, display, sound, accounts and apps: the TV's own settings.")
                             PillButton("Open Android TV settings", onClick = onOpenSystemSettings)
                         }
-                        SettingsSection.ABOUT -> AboutPane()
+                        SettingsSection.ABOUT -> AboutPane(settings, repo)
                     }
                 }
             }
@@ -312,7 +315,7 @@ private fun Command(text: String) {
 }
 
 @Composable
-private fun AboutPane() {
+private fun AboutPane(settings: LauncherSettings, repo: SettingsRepository) {
     PaneHeader("About")
     Row {
         Column(Modifier.weight(1f)) {
@@ -322,10 +325,144 @@ private fun AboutPane() {
             Spacer(Modifier.height(12.dp))
             Text("Releases and source code:", style = style(12, FontWeight.Normal, alpha = 0.7f))
             Text(LauncherConfig.RELEASES_URL, style = style(13, FontWeight.Normal))
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Text("Inter typeface: SIL Open Font License 1.1", style = style(11, FontWeight.Normal, alpha = 0.6f))
         }
         Spacer(Modifier.width(16.dp))
-        QrCode(LauncherConfig.RELEASES_URL, Modifier.size(128.dp))
+        QrCode(LauncherConfig.RELEASES_URL, Modifier.size(112.dp))
+    }
+    Spacer(Modifier.height(18.dp))
+    UpdateSection(settings, repo)
+}
+
+private sealed interface UpdateState {
+    data object Idle : UpdateState
+    data object Checking : UpdateState
+    data object UpToDate : UpdateState
+    data class Available(val release: Updates.Release) : UpdateState
+    data class NeedsPermission(val release: Updates.Release) : UpdateState
+    data class Downloading(val release: Updates.Release, val progress: Float) : UpdateState
+    data object Installing : UpdateState
+    data class Failed(val message: String) : UpdateState
+}
+
+@Composable
+private fun UpdateSection(settings: LauncherSettings, repo: SettingsRepository) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
+    val installError by Updates.installError.collectAsState()
+    val actionFocus = remember { FocusRequester() }
+
+    fun download(release: Updates.Release) {
+        if (!Updates.canInstall(context)) {
+            state = UpdateState.NeedsPermission(release)
+            return
+        }
+        state = UpdateState.Downloading(release, 0f)
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val apk = Updates.download(context, release) { p -> state = UpdateState.Downloading(release, p) }
+                    Updates.install(context, apk)
+                }
+            }
+            state = result.fold({ UpdateState.Installing }, { UpdateState.Failed(it.message ?: "The download failed.") })
+        }
+    }
+
+    val allowInstalls = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        (state as? UpdateState.NeedsPermission)?.let { if (Updates.canInstall(context)) download(it.release) }
+    }
+
+    fun check() {
+        state = UpdateState.Checking
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Updates.latest() } }
+            result.onSuccess { repo.setUpdateCheck(it.tag, System.currentTimeMillis()) }
+            state = result.fold(
+                { if (Updates.isNewer(it.tag)) UpdateState.Available(it) else UpdateState.UpToDate },
+                { UpdateState.Failed("Couldn't check for updates: ${it.message ?: "no connection"}") },
+            )
+        }
+    }
+
+    val shown = if (installError != null && state == UpdateState.Installing) UpdateState.Failed(installError!!) else state
+    when (shown) {
+        UpdateState.Idle -> {
+            if (Updates.isNewer(settings.latestVersionSeen)) {
+                UpdateLine("Version ${settings.latestVersionSeen?.removePrefix("v")} is available.", accent = true)
+            }
+            PillButton("Check for updates", onClick = ::check, modifier = Modifier.focusRequester(actionFocus))
+        }
+        UpdateState.Checking -> UpdateLine("Checking…")
+        UpdateState.UpToDate -> {
+            UpdateLine("You're up to date.")
+            PillButton("Check again", onClick = ::check, modifier = Modifier.focusRequester(actionFocus))
+        }
+        is UpdateState.Available -> {
+            UpdateLine("Nyumbani ${shown.release.version} is available.", accent = true)
+            val notes = plainNotes(shown.release.notes)
+            if (notes.isNotEmpty()) {
+                Text(
+                    notes,
+                    style = style(12, FontWeight.Normal, alpha = 0.8f),
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 10.dp),
+                )
+            }
+            if (shown.release.apkUrl != null) {
+                PillButton("Download & install", onClick = { download(shown.release) }, modifier = Modifier.focusRequester(actionFocus))
+            } else {
+                UpdateLine("This release has no APK attached yet. Try again later.")
+            }
+        }
+        is UpdateState.NeedsPermission -> {
+            UpdateLine("First, allow Nyumbani to install apps: turn on \"Install unknown apps\" for Nyumbani.", accent = true)
+            PillButton(
+                "Open settings",
+                onClick = {
+                    if (runCatching { allowInstalls.launch(Updates.unknownAppsSettings(context)) }.isFailure) {
+                        state = UpdateState.Failed(
+                            "Open Android TV settings → Apps → Security & restrictions → Unknown sources, turn on Nyumbani, then try again.",
+                        )
+                    }
+                },
+                modifier = Modifier.focusRequester(actionFocus),
+            )
+        }
+        is UpdateState.Downloading -> UpdateLine("Downloading ${shown.release.version}… ${(shown.progress * 100).toInt()}%")
+        UpdateState.Installing -> UpdateLine("Confirm the install on screen. Nyumbani restarts when it's done.")
+        is UpdateState.Failed -> {
+            UpdateLine(shown.message, accent = true)
+            PillButton("Try again", onClick = ::check, modifier = Modifier.focusRequester(actionFocus))
+        }
+    }
+
+    // Keep focus on the button when the state underneath it changes.
+    LaunchedEffect(shown::class) {
+        if (shown !is UpdateState.Idle) runCatching { actionFocus.requestFocus() }
     }
 }
+
+@Composable
+private fun UpdateLine(text: String, accent: Boolean = false) {
+    Text(
+        text,
+        style = style(13, FontWeight.Medium, color = if (accent) Accent else Color.White, alpha = if (accent) 1f else 0.85f),
+        modifier = Modifier.padding(bottom = 10.dp),
+    )
+}
+
+/** GitHub's generated notes, as plain lines: no markdown, no "by @someone in <link>". */
+private fun plainNotes(markdown: String): String = markdown.lineSequence()
+    .map { it.trim() }
+    .filter { it.isNotEmpty() && !it.startsWith("**Full Changelog**") && !it.startsWith("<!--") }
+    .map { line ->
+        line.trimStart('#', ' ')
+            .replace(Regex("^[*-] "), "• ")
+            .replace(Regex(" by @\\S+ in https://\\S+$"), "")
+            .replace("**", "")
+    }
+    .joinToString("\n")

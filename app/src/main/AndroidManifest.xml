@@ -11,6 +11,8 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- Install updates downloaded from GitHub Releases (asks you to confirm each time). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- "From USB": list and copy images from USB drives, Download and Pictures. -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -53,5 +55,10 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Hears back from the system installer during an update. -->
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="false" />
     </application>
 </manifest>

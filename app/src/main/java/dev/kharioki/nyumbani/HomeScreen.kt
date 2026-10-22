@@ -12,6 +12,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -120,6 +122,7 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
     val dock = remember(dockPackages, allApps) { repo.resolveDock(dockPackages, allApps) }
     val dockIds = dock.map { it.packageName }
     val showSetup = settings?.setupDone == false
+    val updateAvailable = Updates.isNewer(settings?.latestVersionSeen)
 
     fun saveDock(packages: List<String>) {
         scope.launch { settingsRepo.setDock(packages) }
@@ -139,6 +142,11 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
             wallpaper = withContext(Dispatchers.IO) { Wallpaper.load(context, wallpaperId, w, h) }
             wallpaperSignature = signature
         }
+    }
+
+    // At most once a day, on resume: is there a newer release? (Puts a dot on the gear.)
+    LaunchedEffect(resumeTick, settings != null) {
+        settings?.let { Updates.checkQuietly(settingsRepo, it) }
     }
 
     // Refresh installed apps on every resume.
@@ -268,7 +276,8 @@ fun HomeScreen(resumeTick: Int, homeTick: Int) {
                                     onClick = { overlay = Overlay.AllApps },
                                 ) { DotsGrid() }
                                 RoundButton(
-                                    label = "Settings",
+                                    label = if (updateAvailable) "Update ready" else "Settings",
+                                    badge = updateAvailable,
                                     focusable = dockFocusable,
                                     modifier = Modifier.focusRequester(gearFocus),
                                     onFocused = { activePackage = null },
@@ -606,35 +615,56 @@ private fun RoundButton(
     onFocused: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    badge: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         // Same height as the label below, so the circle lines up with the middle of the app tiles.
         Spacer(Modifier.height(LabelSlot))
-        Surface(
-            onClick = onClick,
-            modifier = modifier
-                .size(48.dp)
-                .onFocusChanged {
-                    focused = it.isFocused
-                    if (it.isFocused) onFocused()
-                }
-                .focusProperties { canFocus = focusable },
-            shape = ClickableSurfaceDefaults.shape(shape = CircleShape),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.12f),
-            colors = ClickableSurfaceDefaults.colors(
-                containerColor = Color.White.copy(alpha = 0.14f),
-                contentColor = Color.White,
-                focusedContainerColor = Color.White,
-                focusedContentColor = Night,
-            ),
-        ) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
+        Box {
+            Surface(
+                onClick = onClick,
+                modifier = modifier
+                    .size(48.dp)
+                    .onFocusChanged {
+                        focused = it.isFocused
+                        if (it.isFocused) onFocused()
+                    }
+                    .focusProperties { canFocus = focusable },
+                shape = ClickableSurfaceDefaults.shape(shape = CircleShape),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.12f),
+                colors = ClickableSurfaceDefaults.colors(
+                    containerColor = Color.White.copy(alpha = 0.14f),
+                    contentColor = Color.White,
+                    focusedContainerColor = Color.White,
+                    focusedContentColor = Night,
+                ),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
+            }
+            if (badge) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .size(12.dp)
+                        .border(2.dp, Night, CircleShape)
+                        .padding(2.dp)
+                        .background(Accent, CircleShape)
+                )
+            }
         }
-        // Label only appears on focus, keeping the dock clean.
-        Box(Modifier.height(LabelSlot), contentAlignment = Alignment.BottomCenter) {
-            if (focused) Text(label, style = style(11, FontWeight.Medium, alpha = 0.9f), maxLines = 1)
+        // Label only appears on focus, keeping the dock clean. It may be wider than the button,
+        // but mustn't push the dock around, so it doesn't take part in the width.
+        Box(Modifier.width(48.dp).height(LabelSlot), contentAlignment = Alignment.BottomCenter) {
+            if (focused) {
+                Text(
+                    label,
+                    style = style(11, FontWeight.Medium, alpha = 0.9f),
+                    maxLines = 1,
+                    modifier = Modifier.wrapContentWidth(unbounded = true),
+                )
+            }
         }
     }
 }

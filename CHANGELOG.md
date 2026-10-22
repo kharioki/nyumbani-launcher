@@ -20,6 +20,8 @@ First public release.
 - Four bundled wallpapers, plus your own: send a photo from your phone by scanning a QR code,
   or copy one from a USB drive.
 - "Make Nyumbani your Home screen" asks the TV directly where it can, with ADB steps otherwise.
+- Update check in About and once a day in the background (a dot on the gear); download and
+  install from the TV, checked against the release's SHA-256 checksums.
 
 [Unreleased]: https://github.com/kharioki/nyumbani-launcher/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/kharioki/nyumbani-launcher/releases/tag/v1.0.0
